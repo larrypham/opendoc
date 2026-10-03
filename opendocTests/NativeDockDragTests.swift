@@ -253,6 +253,54 @@ final class NativeDockDragTests: XCTestCase {
         }
     }
 
+    func testFoldersAndWidgetCardsReuseTheDockPopovers() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = DockStore(fileURL: url)
+        var first = DockItem(kind: .folder, title: "First", symbol: "folder")
+        var second = DockItem(kind: .folder, title: "Second", symbol: "folder")
+        first.children = []; second.children = []
+        let clock = DockItem.widget(.clock)
+        var profile = DockProfile(name: "Popover reuse", symbol: "folder", color: "green", items: [first, second, clock])
+        profile.appearance.autoHide = false
+        try store.create(profile)
+        let dock = NativeDockController(profileID: profile.id, store: store, application: MacApplication())
+        defer { dock.close() }
+        dock.showWindow(nil)
+        func settle(_ popover: NSPopover) {
+            let deadline = Date().addingTimeInterval(3)
+            while popover.isShown, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        }
+        // A new NSPopover per click leaks its glass background on macOS 26.
+        // Open each next item at once, while the previous popover may still be closing.
+        for item in [first, second, clock, first, clock, second] {
+            let previousFolder = dock.folderController
+            dock.open(item)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            if item.kind == .folder {
+                // Clicking a card that is still closing toggles it, as before.
+                settle(dock.widgetPopover)
+                XCTAssertTrue(dock.folderPopover.contentViewController === dock.folderController, item.title)
+                XCTAssertEqual(dock.folderController?.isShown, true, item.title)
+                // A replaced folder no longer owns the shared popover and must not close it.
+                if let previousFolder, previousFolder !== dock.folderController {
+                    XCTAssertFalse(previousFolder.isShown)
+                    previousFolder.close(animated: false)
+                    XCTAssertEqual(dock.folderController?.isShown, true, item.title)
+                }
+            } else {
+                XCTAssertNotNil(dock.widgetPopover.contentViewController)
+                XCTAssertTrue(dock.widgetPopover.isShown)
+                settle(dock.folderPopover)
+                XCTAssertFalse(dock.folderPopover.isShown)
+            }
+        }
+        dock.open(second)
+        settle(dock.folderPopover)
+        XCTAssertFalse(dock.folderPopover.isShown)
+        XCTAssertNil(dock.folderPopover.contentViewController, "A closed popover must release its folder")
+    }
+
     func testRunningAppsDeduplicateBundlePathsAndExcludeFolderChildren() {
         let a = URL(fileURLWithPath: "/Applications/A.app")
         let b = URL(fileURLWithPath: "/Applications/B.app")

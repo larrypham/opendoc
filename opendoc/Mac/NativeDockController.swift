@@ -19,6 +19,11 @@ final class NativeDockController: NSWindowController, NSMenuDelegate {
     private var screenObserver: NSObjectProtocol?
     private var editor: NativeWidgetEditor?
     private(set) var folderController: NativeFolderController?
+    /// One popover per dock, reused by every folder and widget card. On macOS 26
+    /// each discarded NSPopover keeps its glass background and backing surface
+    /// alive, so creating one per click grew memory without bound.
+    let folderPopover = NSPopover()
+    let widgetPopover = NSPopover()
     private var widgetLibrary: NativeWidgetLibrary?
     private var groupTarget: UUID?
     private var groupCandidate: (UUID, Date)?

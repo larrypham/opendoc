@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 final class NativeFolderController: NSViewController, NSPopoverDelegate, NSTextFieldDelegate, NSMenuDelegate {
     let folderID: UUID
     private weak var dock: NativeDockController?
-    private let popover = NSPopover()
+    /// Shared by every folder on this dock. See `NativeDockController.folderPopover`.
+    private let popover: NSPopover
     private weak var firstAppButton: NSButton?
     private var observer: NSObjectProtocol?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -18,20 +19,20 @@ final class NativeFolderController: NSViewController, NSPopoverDelegate, NSTextF
     private var previousPageButton: NSButton?
     private var nextPageButton: NSButton?
     private var pageLabel: NSTextField?
-    var isShown: Bool { popover.isShown }
+    /// The popover is reused, so it belongs to this folder only while it shows this content.
+    private var ownsPopover: Bool { popover.contentViewController === self }
+    var isShown: Bool { ownsPopover && popover.isShown }
     private var folder: DockItem? { dock?.profile?.items.first { $0.id == folderID } }
 
     init(folderID: UUID, dock: NativeDockController) {
         self.folderID = folderID
         self.dock = dock
+        popover = dock.folderPopover
         super.init(nibName: nil, bundle: nil)
-        popover.contentViewController = self
-        popover.behavior = .transient
-        popover.delegate = self
         observer = NotificationCenter.default.addObserver(forName: DockStore.changed, object: dock.store, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if self.folder == nil { self.popover.close() } else { self.render() }
+                if self.folder == nil { self.close() } else { self.render() }
             }
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
@@ -48,7 +49,14 @@ final class NativeFolderController: NSViewController, NSPopoverDelegate, NSTextF
     override func loadView() { view = FlippedNativeView(); render() }
 
     func show(relativeTo anchor: NSView, rect: NSRect? = nil) {
-        if popover.isShown { close(); return }
+        if isShown { close(); return }
+        // Another folder may still be animating out of the shared popover.
+        // Finish that close first so its callback cannot dismiss this folder.
+        if popover.isShown { popover.animates = false; popover.close() }
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = self
+        popover.contentSize = view.frame.size
         dock?.interacting = true
         dock?.reveal(animated: false)
         popover.animates = !NativeMotion.reducesMotion
@@ -79,14 +87,17 @@ final class NativeFolderController: NSViewController, NSPopoverDelegate, NSTextF
         })
     }
     func close(animated: Bool = true) {
+        guard ownsPopover else { return }
         popover.animates = animated && !NativeMotion.reducesMotion
         // Explicit folder actions must also close auxiliary windows, such as
         // tooltips. performClose refuses to close a popover with child windows.
         popover.close()
     }
     func popoverDidClose(_ notification: Notification) {
+        guard ownsPopover else { return }
         dock?.interacting = false; dock?.scheduleHide()
         popover.contentViewController = nil
+        popover.delegate = nil
         if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
     }
 
@@ -113,7 +124,7 @@ final class NativeFolderController: NSViewController, NSPopoverDelegate, NSTextF
         let size = NSSize(width: width, height: footerTop + 60)
         view.setFrameSize(size)
         preferredContentSize = size
-        popover.contentSize = size
+        if ownsPopover { popover.contentSize = size }
         let title = NSTextField(string: folder.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.isBezeled = false; title.drawsBackground = false; title.delegate = self

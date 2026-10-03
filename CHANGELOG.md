@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2
+
+- Fix memory that grew by about 1.7 MB each time a folder or widget card opened on macOS 26. Over days of use the dock could hold several gigabytes. Each dock now reuses one popover for folders and one for widget cards.
+
 ## 1.4.1
 
 - Show Claude's real logo in usage rings when Claude Desktop is not installed, using the logo from the installed CodexBar app instead of a generic sparkle.

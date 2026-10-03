@@ -8,7 +8,8 @@ final class NativeWidgetEditor: NSViewController, NSTextViewDelegate, NSPopoverD
     let itemID: UUID
     private let store: DockStore
     private weak var dock: NativeDockController?
-    private let popover = NSPopover()
+    /// Shared by every widget card on this dock. See `NativeDockController.folderPopover`.
+    private let popover: NSPopover
     private let content = NSStackView()
     private var header: NativeCardHeader?
     private let value = NativeCard.value()
@@ -27,14 +28,15 @@ final class NativeWidgetEditor: NSViewController, NSTextViewDelegate, NSPopoverD
     private var focusNewTask = false
     private var terminationObserver: NSObjectProtocol?
     private var observer: NSObjectProtocol?
-    var isShown: Bool { popover.isShown }
+    /// The popover is reused, so it belongs to this card only while it shows this content.
+    private var ownsPopover: Bool { popover.contentViewController === self }
+    var isShown: Bool { ownsPopover && popover.isShown }
     private var item: DockItem? { store.archive.profiles.flatMap(\.items).first { $0.id == itemID } }
 
     init(itemID: UUID, dock: NativeDockController) {
         self.itemID = itemID; self.store = dock.store; self.dock = dock
+        popover = dock.widgetPopover
         super.init(nibName: nil, bundle: nil)
-        popover.behavior = .transient
-        popover.delegate = self
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.saveNote() }
         }
@@ -63,6 +65,11 @@ final class NativeWidgetEditor: NSViewController, NSTextViewDelegate, NSPopoverD
     }
     func show(relativeTo anchor: NSView, rect: NSRect? = nil) {
         dock?.reveal(animated: false)
+        // Another card may still be animating out of the shared popover.
+        // Finish that close first so its callback cannot dismiss this card.
+        if popover.isShown { popover.animates = false; popover.close() }
+        popover.behavior = .transient
+        popover.delegate = self
         popover.contentViewController = self
         _ = view
         popover.contentSize = view.frame.size
@@ -77,6 +84,7 @@ final class NativeWidgetEditor: NSViewController, NSTextViewDelegate, NSPopoverD
         }
     }
     @discardableResult func close() -> Bool {
+        guard ownsPopover else { return true }
         guard saveNote() else { return false }
         popover.performClose(nil)
         return true
@@ -85,7 +93,9 @@ final class NativeWidgetEditor: NSViewController, NSTextViewDelegate, NSPopoverD
     func popoverDidClose(_ notification: Notification) {
         timer?.invalidate(); noteSaveTimer?.invalidate()
         customView?.stopRefreshing()
+        guard ownsPopover else { return }
         popover.contentViewController = nil
+        popover.delegate = nil
         dock?.scheduleHide()
     }
     deinit {
